@@ -1,0 +1,170 @@
+# OpenHup configuration.
+#
+# Normally this file is created for you: `make setup` (the first-run wizard) bootstraps it from
+# this example, along with vision.yaml, cameras.yaml, and deploy/env/openhup.env with real
+# secrets. That wizard is the supported path; editing this example by hand is for custom setups.
+#
+# Everything here is non-secret and safe to commit to your own dotfiles repo. Secrets - database
+# password, camera passwords, API keys - live in deploy/env/openhup.env instead, referenced by name.
+#
+# Environment variables override any of this: OPENHUP__SECURITY__BIND_HOST beats security.bind_host.
+
+instance_name: OpenHup
+state_dir: /var/lib/openhup
+config_dir: /etc/openhup
+log_level: INFO
+log_format: text          # text | json
+
+database:
+  url: postgresql+asyncpg://openhup:CHANGE_ME@127.0.0.1:5432/openhup
+  pool_size: 5
+
+bus:
+  url: redis://127.0.0.1:6379/0
+  # About a day of observation history at one sample/second. This is what
+  # POST /skills/{id}/simulate replays when it dry-runs a skill against real history, so a bigger
+  # number buys deeper dry-runs at the cost of Redis memory.
+  observation_maxlen: 100000
+
+engine:
+  # The tick that lets `for: 15m` and `absent_for: 4h` become true without new data arriving. Not an
+  # optimisation - a correctness requirement. Evaluation is pure in-memory work, so 1s is cheap.
+  tick: 1s
+  # Rebuild signal windows from stored observations at startup, so a restart does not reset every
+  # long-running condition to zero.
+  warm_start: true
+  warm_start_window: 6h
+  # Pause everything: holidays, guests, a house full of builders. Tasks stop being created; nothing
+  # is lost.
+  paused: false
+
+llm:
+  # ollama (default, local) | openai_compatible | anthropic | echo
+  #
+  # The AI layer is core (ADR-008): there is no "none". The setup wizard (openhup setup) asks for
+  # a provider - local Ollama by default, or a trusted cloud provider behind the egress gate below.
+  # Cloud providers accept a custom base_url: point openai_compatible at any OpenAI-compatible
+  # endpoint (OpenRouter, a gateway, a proxy), and anthropic at an Anthropic-compatible one.
+  # `echo` is the deterministic offline provider, for tests and offline tooling only.
+  provider: ollama
+  base_url: http://127.0.0.1:11434
+  model: qwen2.5:7b-instruct
+  timeout: 30s
+
+  # --- egress policy ---------------------------------------------------------------------------
+  # A remote provider is refused at startup unless this is true. Deliberately awkward.
+  allow_remote_llm: false
+  # text_only      facts and labels only; no images, no raw object inventories
+  # redacted_image snapshots with people blurred
+  # full           anything (you are choosing this knowingly)
+  redaction_profile: text_only
+
+voice:
+  # Voice interface (speech-to-text and text-to-speech). Browser-native by default: the PWA uses
+  # the browser's Web Speech API, so nothing is uploaded to OpenHup and the microphone is gated
+  # behind a wake word matched in the client. See docs/VOICE.md.
+  enabled: true
+  # Where recognition/synthesis run. `browser` = Web Speech API (fully local).
+  # `openai` / `openai_compatible` = server-side; requires allow_remote_voice below unless
+  # treat_as_local is true. The setup wizard (`make setup`) asks this question - cloud is a
+  # first-class choice, so a machine without local speech hardware is not a reason to skip voice.
+  stt_provider: browser
+  tts_provider: browser
+  wake_word: hey openhup
+  language: en
+
+  # --- egress policy ---------------------------------------------------------------------------
+  # A remote provider is refused at startup unless this is true. Same shape as llm.allow_remote_llm.
+  allow_remote_voice: false
+  # Point openai_compatible at a local gateway (whisper.cpp / Piper) and set this to skip the gate.
+  # treat_as_local: false
+  # base_url: http://whisper:8080/v1
+
+identity:
+  # Who is in the room, consent-gated (ADR-016). The camera computes a face embedding only to ask
+  # whether it may remember the person; nothing is stored until they answer "yes", a "no" stores
+  # a date marker and nothing else, and identity is presence - never attribution, never a skill
+  # trigger, never per-person behaviour tracking. The consent question is asked at most once per
+  # anchor per day, and the marker is a date, never a face. See docs/SECURITY_PRIVACY.md.
+  enabled: true
+  # A face must score this well against an enrolled member's embedding to be named. Lower = more
+  # permissive, and a wrong name is the worst thing the assistant can say, so keep it strict.
+  match_threshold: 0.55
+
+snapshots:
+  directory: /var/lib/openhup/snapshots
+  # Served through the API, not as a static directory, so authentication actually applies to
+  # imagery of the inside of your home.
+  serve_via_api: true
+  max_bytes: 5368709120     # 5 GiB
+  # Ceiling on any individual skill's retention. A skill asking for longer is clamped to this.
+  max_retention: 90d
+
+security:
+  # Loopback by default. Change this only behind a reverse proxy, or on a network you trust.
+  bind_host: 127.0.0.1
+  bind_port: 8080
+  session_lifetime: 30d
+  # Only enable behind an actual proxy, or client IPs in the audit log can be spoofed.
+  trust_proxy_headers: false
+  require_auth: true
+  cors_origins: []
+
+notify:
+  # Hold non-urgent notifications during these hours. They appear in the UI immediately and are
+  # delivered when the window ends - held, never dropped. High-urgency alerts ignore this entirely.
+  quiet_hours:
+    between: ["22:00", "07:00"]
+    tz: local
+  # Per-channel ceiling. One miscalibrated skill must not be able to empty your phone battery.
+  max_per_hour: 12
+
+  channels:
+    # Self-hosted ntfy is the recommended default: no account, iOS and Android apps, carries images.
+    ntfy:
+      type: ntfy
+      url: https://ntfy.sh          # or http://ntfy:80 if you self-host
+      topic: ${NTFY_TOPIC}
+      tags: house
+      attach_images: true
+      min_urgency: low
+
+    # Route safety alerts somewhere louder than chores.
+    # sms_webhook:
+    #   type: webhook
+    #   url: https://your-sms-gateway.example/send
+    #   min_urgency: high
+
+    # Publish to MQTT so Home Assistant and the rest of the house can react.
+    # mqtt:
+    #   type: mqtt
+    #   host: 127.0.0.1
+    #   topic: openhup/notifications
+    #   min_urgency: normal
+
+personality:
+  default_personality: kind_coach
+  # 1..5. Nobody in the household can be raised past this, whatever their own setting says.
+  humor_ceiling: 3
+  # Required before any personality reaches intensity 4 or above (chaos_goblin).
+  roast_consent: false
+
+  # The personality gamble (ADR-014): run `make setup` / `openhup setup` on a fresh install and
+  # either pick one of the five gamble voices below or gamble. A gambled voice is drawn at first
+  # launch and never announced - you discover it by living with it, and config.yaml is the only
+  # place the answer is written down. All five are at intensity 3 or below, so a draw is never
+  # silently clamped by the humor_ceiling above.
+  # gamble: true
+  # gamble_pool: [friendly, shy, sassy, sarcastic, angry]
+
+ux:
+  # Show one task at a time across the whole app, not just per skill. Turn this on if lists are
+  # the problem rather than the solution.
+  global_single_task_focus: false
+  show_snapshots: true
+  # Never display a count of outstanding tasks anywhere. On by default, and the API does not even
+  # compute one. See docs/UX_NEURODIVERGENT.md for why this is a default rather than an option.
+  hide_task_counts: true
+  celebrate_completions: true
+  locale: en
+  timezone: Europe/Lisbon

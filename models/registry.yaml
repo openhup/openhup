@@ -1,0 +1,187 @@
+# Model registry.
+#
+# Weights are NEVER committed to this repository. This file records where each model comes from, its
+# sha256, and - critically - its licence, so that nobody accidentally takes on an obligation they did
+# not choose. Fetch and verify with:
+#
+#   uv run python -m openhup_vision.backends --fetch
+#   uv run python -m openhup_vision.backends --fetch --only clip-vit-b32
+#
+# LICENCE NOTE, worth reading once:
+#   Every default model here is Apache-2.0 or MIT. Ultralytics YOLOv8/YOLOv11 - the most popular
+#   option, and genuinely good - is AGPL-3.0, and using it may impose AGPL obligations on your
+#   deployment. It is therefore listed as opt-in, is not a default, and no Ultralytics weights are
+#   vendored or auto-fetched. OpenHup's own Apache-2.0 licence does not extend to any model you
+#   choose to download. See ADR-004.
+#
+# Checksum status: `yolox-s` and `clip-vit-b32` are pinned and verified. The rest are
+# `sha256: PENDING` and still need a working upstream URL before they can be pinned - the D-FINE
+# release URL returns 404 and the onnx-community HuggingFace repos return 401 (gated). `--fetch`
+# refuses to run against a PENDING entry unless `--trust-first-use` is passed, which pins whatever it
+# downloads into models/registry.lock.yaml so subsequent installs are verified. This is deliberately
+# awkward: silently accepting unverified model weights is a supply-chain hole.
+
+version: 1
+
+defaults:
+  # Where fetched weights land. Override with OPENHUP_MODEL_DIR.
+  directory: ./models
+  # Execution providers tried in order; the first available wins.
+  providers: [TensorrtExecutionProvider, CUDAExecutionProvider, OpenVINOExecutionProvider, CPUExecutionProvider]
+
+models:
+  # ---------------------------------------------------------------- object detection
+  - id: yolox-s
+    title: YOLOX-S (ONNX)
+    task: detect
+    licence: Apache-2.0
+    source: https://github.com/Megvii-BaseDetection/YOLOX
+    url: https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_s.onnx
+    file: yolox_s.onnx
+    sha256: c5c2d13e59ae883e6af3b45daea64af4833a4951c92d116ec270d9ddbe998063
+    input: {name: images, shape: [1, 3, 640, 640], layout: NCHW, dtype: float32, normalise: none}
+    labels: coco80
+    notes: >
+      The default detector. Apache-2.0, exports cleanly to ONNX, and fast enough on an N100 iGPU to
+      cover four cameras. Note YOLOX expects raw 0-255 input, not 0-1 normalised.
+
+  - id: dfine-s
+    title: D-FINE-S (ONNX)
+    task: detect
+    licence: Apache-2.0
+    source: https://github.com/Peterande/D-FINE
+    url: https://github.com/Peterande/D-FINE/releases/download/v1.0/dfine_s_coco.onnx
+    file: dfine_s_coco.onnx
+    sha256: PENDING
+    input: {name: images, shape: [1, 3, 640, 640], layout: NCHW, dtype: float32, normalise: imagenet}
+    labels: coco80
+    notes: >
+      Better accuracy per FLOP than YOLOX and needs no NMS post-processing. Preferred when
+      available; kept second because the export is less widely mirrored.
+
+  # ---------------------------------------------------------------- zero-shot / embeddings
+  - id: clip-vit-b32
+    title: CLIP ViT-B/32 (image + text encoders, ONNX)
+    task: embed
+    licence: MIT
+    source: https://github.com/openai/CLIP
+    url: https://huggingface.co/khasinski/clip-ViT-B-32-onnx/resolve/main/visual.onnx
+    file: clip_vit_b32_visual.onnx
+    sha256: 78e896b2c7301d01eda84e280d7c7297299aa6f8bacc0f5f8fe5bd60d42d8aae
+    companions:
+      - {file: clip_vit_b32_textual.onnx, url: https://huggingface.co/khasinski/clip-ViT-B-32-onnx/resolve/main/textual.onnx, sha256: 55c85d8cbb096023781c1d13c557eb95d26034c111bd001b7360fdb7399eec68}
+    input: {name: input, shape: [1, 3, 224, 224], layout: NCHW, dtype: float32, normalise: clip}
+    notes: >
+      Does three jobs: the semantic component of clutter scoring, all zero-shot state detection
+      (burner on/off, door open/closed), and the embedding half of baseline comparison. Text
+      embeddings for configured probes are computed once at startup and cached, so the text encoder
+      is not in the hot path. The textual companion takes token ids ([1, 77] int64), not pixels, so
+      it is fetched and verified but never driven through the image preprocessor.
+
+  - id: clip-vit-b32-int8
+    title: CLIP ViT-B/32, int8 quantised
+    task: embed
+    licence: MIT
+    source: https://github.com/openai/CLIP
+    url: https://huggingface.co/jina-ai/clip-as-service/resolve/main/onnx/ViT-B-32/visual.int8.onnx
+    file: clip_vit_b32_visual_int8.onnx
+    sha256: PENDING
+    input: {name: pixel_values, shape: [1, 3, 224, 224], layout: NCHW, dtype: float32, normalise: clip}
+    notes: >
+      Roughly 3x faster on CPU for a small accuracy cost that clutter scoring absorbs easily.
+      The right default on a Pi or a CPU-only mini PC.
+
+  # ---------------------------------------------------------------- optional, opt-in
+  - id: yolo-world-s
+    title: YOLO-World S (open vocabulary)
+    task: detect_open_vocab
+    licence: Apache-2.0 (code); check weights before redistributing
+    source: https://github.com/AILab-CVC/YOLO-World
+    url: https://huggingface.co/onnx-community/yolo-world-s/resolve/main/model.onnx
+    file: yolo_world_s.onnx
+    sha256: PENDING
+    optional: true
+    input: {name: images, shape: [1, 3, 640, 640], layout: NCHW, dtype: float32, normalise: none}
+    notes: >
+      Powers presence_absence for nouns COCO never heard of - "dish drying rack", "pet bowl". Slow;
+      give it multi-minute intervals. Presence rarely changes second to second.
+
+  - id: owlv2-base
+    title: OWLv2 base (open vocabulary)
+    task: detect_open_vocab
+    licence: Apache-2.0
+    source: https://huggingface.co/google/owlv2-base-patch16-ensemble
+    url: https://huggingface.co/onnx-community/owlv2-base-patch16-ensemble/resolve/main/onnx/model.onnx
+    file: owlv2_base.onnx
+    sha256: PENDING
+    optional: true
+    input: {name: pixel_values, shape: [1, 3, 960, 960], layout: NCHW, dtype: float32, normalise: clip}
+    notes: More accurate than YOLO-World on unusual nouns, and considerably slower.
+
+  - id: rtmpose-s
+    title: RTMPose-S (pose)
+    task: pose
+    licence: Apache-2.0
+    source: https://github.com/open-mmlab/mmpose
+    url: https://huggingface.co/onnx-community/rtmpose-s/resolve/main/model.onnx
+    file: rtmpose_s.onnx
+    sha256: PENDING
+    optional: true
+    input: {name: input, shape: [1, 3, 256, 192], layout: NCHW, dtype: float32, normalise: imagenet}
+    notes: >
+      Backs the opt-in pose_fall detector. Read the caveats in
+      examples/skills/more-examples.yaml before enabling anything that depends on it.
+
+  # ---------------------------------------------------------------- consent-gated identity (ADR-016)
+  - id: yunet-face
+    title: YuNet face detector (OpenCV Zoo)
+    task: detect_face
+    licence: Apache-2.0
+    source: https://github.com/opencv/opencv_zoo
+    url: https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
+    file: yunet_face.onnx
+    sha256: PENDING
+    optional: true
+    input: {name: input, shape: [1, 3, 320, 320], layout: NCHW, dtype: float32, normalise: none}
+    notes: >
+      Backs the consent-gated face_id detector (ADR-016). Finds faces; it never identifies anyone -
+      the embedding model does that, and only against the enrolled gallery. Apache-2.0, small,
+      fast enough to run at 15s cadence on an N100 iGPU.
+
+  - id: mobilefacenet
+    title: MobileFaceNet embedding
+    task: face_embed
+    licence: Apache-2.0
+    source: https://github.com/ximeialiu/MobileFaceNet_ONNX
+    url: https://github.com/ximeialiu/MobileFaceNet_ONNX/raw/main/mobilefacenet.onnx
+    file: mobilefacenet.onnx
+    sha256: PENDING
+    optional: true
+    input: {name: input, shape: [1, 3, 112, 112], layout: NCHW, dtype: float32, normalise: imagenet}
+    notes: >
+      Produces the 128-d embedding the face_id detector matches against the enrolled gallery.
+      Only ever runs on faces, only ever against members who consented, and its output is never
+      persisted for an unknown person (ADR-016).
+
+  # ---------------------------------------------------------------- opt-in, licence caution
+  - id: yolov8n-ultralytics
+    title: YOLOv8n (Ultralytics)
+    task: detect
+    licence: AGPL-3.0
+    licence_warning: >
+      AGPL-3.0. Enabling this may impose AGPL obligations on your whole deployment, including any
+      network service you expose. OpenHup does not ship, vendor, or auto-fetch these weights, and
+      does not use them by default. Choose it knowingly or not at all.
+    source: https://github.com/ultralytics/ultralytics
+    url: null
+    file: yolov8n.onnx
+    sha256: PENDING
+    optional: true
+    requires_explicit_consent: true
+    input: {name: images, shape: [1, 3, 640, 640], layout: NCHW, dtype: float32, normalise: zero_one}
+    notes: >
+      Export it yourself if you want it:
+        pip install ultralytics
+        yolo export model=yolov8n.pt format=onnx
+      then drop yolov8n.onnx into the model directory and set
+      vision.detectors.object_inventory.model: yolov8n-ultralytics

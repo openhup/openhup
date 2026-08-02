@@ -1,0 +1,78 @@
+# OpenHup vision service configuration.
+#
+#   mkdir -p config && cp config/vision.yaml.example config/vision.yaml
+#
+# This file describes *this host*: which cameras it owns, where the bus is, which execution
+# provider to use, and where snapshots go. What to actually look at is pulled at runtime from
+# `GET /api/v1/vision/plan`, derived from the currently enabled skills - so adding a skill never
+# requires editing this file or restarting anything.
+#
+# Cameras and anchors live in their own file (cameras.yaml) so they can be shared with the backend;
+# both are merged with `--config` at startup. Everything here is non-secret and safe to commit.
+
+# Identifies this host in logs and the backend's health view. Matters once capture is split across
+# machines.
+node_id: vision-1
+
+# Where the backend API lives. The service pulls its detector plan from here.
+backend_url: http://127.0.0.1:8080
+# Name of the env var holding the bearer token for the backend (see deploy/env/openhup.env).
+api_token_env: OPENHUP_VISION_TOKEN
+
+bus:
+  url: redis://127.0.0.1:6379/0
+  # About a day of observation history at ~1 obs/sec, which is what the backend's simulate endpoint
+  # replays when dry-running a skill against recent history.
+  stream_maxlen: 100000
+
+inference:
+  # Execution providers to try, in order. Leave empty to auto-select the best available.
+  providers: []
+  threads: 2
+  # Where fetched weights land. Override with OPENHUP_MODEL_DIR (compose mounts /models here).
+  model_dir: null
+  # Refuse to load a model whose checksum is not pinned. Keep this true outside development.
+  require_verified_models: true
+  # Per-detector model overrides, e.g. {object_inventory: dfine-s}.
+  models: {}
+
+snapshots:
+  directory: /var/lib/openhup/snapshots
+  jpeg_quality: 80
+  max_bytes: 5368709120     # 5 GiB
+  reap_interval: 15m
+
+agent:
+  # HTTP listener for camera-agents pushing JPEGs in (hosts behind NAT, wifi-only devices).
+  # Only binds when a camera is configured with `kind: agent_push`.
+  enabled: true
+  host: 0.0.0.0
+  port: 8090
+  # Name of the env var holding the shared bearer token. Empty accepts unauthenticated uploads.
+  token_env: OPENHUP_AGENT_TOKEN
+
+mqtt:
+  # Broker for Frigate detections (`kind: frigate`) and external `sensor` values.
+  host: 127.0.0.1
+  port: 1883
+  # Frigate publishes detection events here by default.
+  frigate_topic: frigate/events
+  username: null
+  # Name of the env var holding the broker password, so config files stay secret-free.
+  password_env: OPENHUP_MQTT_PASSWORD
+
+sampling:
+  # Adaptive cadence defaults for every anchor; the plan can override per anchor.
+  active_interval: 5s
+  idle_interval: 30s
+  dormant_interval: 2m
+  settle_after: 2m
+  hibernate_after: 10m
+  heartbeat: 5m
+  motion_threshold: 0.012
+
+# How often to refresh the detector plan from the backend. A changed plan is one string comparison.
+plan_refresh: 5m
+log_level: INFO
+# Run detectors but publish nothing. For calibrating thresholds against a live scene.
+dry_run: false

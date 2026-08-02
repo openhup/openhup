@@ -1,0 +1,72 @@
+[Unit]
+Description=OpenHup API
+Documentation=https://github.com/openhup/openhup/blob/main/docs/INSTALL.md
+After=network-online.target postgresql.service redis-server.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=exec
+User=openhup
+Group=openhup
+WorkingDirectory=/opt/openhup/backend
+EnvironmentFile=/etc/openhup/openhup.env
+Environment=OPENHUP_CONFIG=/etc/openhup/config.yaml
+Environment=PATH=/opt/openhup/backend/.venv/bin:/usr/local/bin:/usr/bin:/bin
+
+ExecStartPre=/opt/openhup/backend/.venv/bin/alembic upgrade head
+ExecStart=/opt/openhup/backend/.venv/bin/uvicorn openhup.api.main:application --factory \
+    --host 127.0.0.1 --port 8080 --proxy-headers
+
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=20s
+
+# --- Hardening -------------------------------------------------------------------------------
+# This process can read imagery of the inside of someone's home. It gets the narrowest sandbox
+# that still lets it work. Verify with:  systemd-analyze security openhup-api.service
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# The only writable paths.
+ReadWritePaths=/var/lib/openhup
+StateDirectory=openhup
+LogsDirectory=openhup
+
+# Loopback plus the LAN, for cameras and Postgres. No IPv6 multicast, no raw sockets.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+IPAddressAllow=192.168.0.0/16
+IPAddressAllow=10.0.0.0/8
+IPAddressAllow=172.16.0.0/12
+# Uncomment ONLY if you use a remote LLM API. Leaving it commented is what makes "nothing leaves
+# your network" enforced by the init system rather than merely intended.
+# IPAddressAllow=any
+
+# Resource ceilings: a runaway process should not take the whole box down.
+MemoryMax=1G
+TasksMax=256
+
+[Install]
+WantedBy=multi-user.target

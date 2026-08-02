@@ -1,0 +1,85 @@
+# Caddy in front of OpenHup.
+#
+# Two things this buys you: TLS without thinking about it, and a single place to add
+# authentication. Caddy is the default because automatic certificates remove the most common reason
+# people end up running a home dashboard over plain HTTP.
+#
+# READ THIS BEFORE EXPOSING ANYTHING. OpenHup holds live imagery of the inside of your home. The
+# safest remote-access setup is not a public hostname at all - it is Tailscale or WireGuard, where
+# nothing is reachable from the internet in the first place. docs/SECURITY_PRIVACY.md compares the
+# options honestly.
+
+# ---------------------------------------------------------------------------------------------
+# Option A: LAN only, no TLS, no public exposure. The default posture.
+# Reachable at http://openhup.local (or the host's IP) from inside your network.
+:80 {
+	@lan {
+		remote_ip 192.168.0.0/16 10.0.0.0/8 172.16.0.0/12 127.0.0.1/32 ::1
+	}
+	handle @lan {
+		reverse_proxy api:8080
+	}
+	# Anything from outside the LAN gets nothing at all - not a login page, not a version banner.
+	handle {
+		respond "Not found" 404
+	}
+
+	encode zstd gzip
+	log {
+		output stdout
+		format console
+	}
+}
+
+# ---------------------------------------------------------------------------------------------
+# Option B: Tailscale. Nothing is published to the internet; the tailnet handles identity and
+# transport. This is the recommended way to reach OpenHup from outside the house.
+#
+# Install Tailscale on the host, then:
+#   tailscale serve --bg 8080
+# and delete the :80 block above. No Caddy needed at all in this arrangement.
+
+# ---------------------------------------------------------------------------------------------
+# Option C: a real public hostname with TLS. Only with authentication in front.
+#
+# Uncomment, set OPENHUP_DOMAIN in deploy/env/openhup.env, and pick one auth method below.
+#
+# {$OPENHUP_DOMAIN} {
+# 	encode zstd gzip
+#
+# 	# Basic auth is the minimum. Generate the hash with:
+# 	#   docker run --rm caddy:2-alpine caddy hash-password --plaintext 'your-password'
+# 	basic_auth {
+# 		{$OPENHUP_USER} {$OPENHUP_PASSWORD_HASH}
+# 	}
+#
+# 	# Better: put an identity-aware proxy in front (Authelia, Authentik, tinyauth) so you get MFA
+# 	# and session management rather than one shared password.
+# 	# forward_auth authelia:9091 {
+# 	# 	uri /api/verify?rd=https://auth.example.org
+# 	# 	copy_headers Remote-User Remote-Groups Remote-Email
+# 	# }
+#
+# 	# WebSockets need no special handling in Caddy 2 - reverse_proxy upgrades automatically.
+# 	reverse_proxy api:8080 {
+# 		header_up X-Real-IP {remote_host}
+# 	}
+#
+# 	header {
+# 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+# 		X-Content-Type-Options nosniff
+# 		X-Frame-Options DENY
+# 		Referrer-Policy no-referrer
+# 		# The UI needs no third-party anything, so the policy can be strict. Snapshots and the API
+# 		# are same-origin; `connect-src` covers the WebSocket.
+# 		Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://{$OPENHUP_DOMAIN}; frame-ancestors 'none'"
+# 		-Server
+# 	}
+#
+# 	log {
+# 		output file /data/access.log {
+# 			roll_size 10MiB
+# 			roll_keep 5
+# 		}
+# 	}
+# }

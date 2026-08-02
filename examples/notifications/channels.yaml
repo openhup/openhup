@@ -1,0 +1,93 @@
+# Notification channel examples.
+#
+# Paste the ones you want into the `notify.channels` section of config/config.yaml. Secrets are
+# referenced from the environment (deploy/env/openhup.env), never written here.
+#
+# The setting most people end up wanting is `min_urgency`, which routes chores and safety differently:
+# clutter to a channel you can ignore, burners to one you cannot. Doing that is the difference between
+# useful alerts and alerts you learn to swipe away.
+#
+# Policy applied above all channels:
+#   - quiet hours HOLD non-urgent notifications and deliver them later. They never vanish.
+#   - urgency >= high ignores quiet hours, rate limits, and dedupe windows entirely.
+#   - one buzz per episode, however many times the engine re-evaluates it.
+
+channels:
+  # --------------------------------------------------------------------------- recommended
+  # ntfy: self-hostable, no account, iOS and Android apps, carries images. The default suggestion.
+  ntfy:
+    type: ntfy
+    url: https://ntfy.sh              # or http://ntfy:80 if you self-host, which you should
+    topic: ${NTFY_TOPIC}              # make this unguessable: the topic IS the credential on ntfy.sh
+    tags: house
+    attach_images: true               # the snapshot is most of the value
+    ui_url: https://openhup.example   # makes notifications tappable through to the task
+    min_urgency: low
+
+  # --------------------------------------------------------------------------- safety routing
+  # A second, louder channel for things that actually matter. Nothing below `high` reaches it, so it
+  # stays trustworthy.
+  ntfy_urgent:
+    type: ntfy
+    url: https://ntfy.sh
+    topic: ${NTFY_URGENT_TOPIC}
+    tags: rotating_light
+    min_urgency: high
+
+  # --------------------------------------------------------------------------- chat
+  discord:
+    type: discord
+    webhook_url: ${DISCORD_WEBHOOK_URL}
+    min_urgency: normal
+
+  matrix:
+    type: matrix
+    homeserver: https://matrix.example.org
+    room_id: "!household:example.org"
+    access_token: ${MATRIX_ACCESS_TOKEN}
+    min_urgency: normal
+
+  # --------------------------------------------------------------------------- home automation
+  # The integration surface for the rest of the house: flash a light, announce on a speaker, or let
+  # Home Assistant decide. MQTT is deliberately not OpenHup's internal bus (ADR-002), but it is how
+  # OpenHup talks to everything else.
+  mqtt:
+    type: mqtt
+    host: 127.0.0.1
+    port: 1883
+    username: openhup
+    password: ${MQTT_PASSWORD}
+    topic: openhup/notifications
+    retain: false
+    min_urgency: low
+
+  # --------------------------------------------------------------------------- escape hatch
+  # Anything not covered. Receives the whole notification as JSON:
+  #   {id, title, body, urgency, link, snapshot_ref}
+  # Point it at a Gotify, Pushover, Signal, or Telegram bridge, or an SMS gateway for safety alerts.
+  webhook:
+    type: webhook
+    url: https://your-bridge.example/notify
+    headers:
+      X-Api-Key: ${BRIDGE_API_KEY}
+    min_urgency: high
+
+  # --------------------------------------------------------------------------- email
+  # Fine for weekly reports, poor for anything time-sensitive.
+  email:
+    type: smtp
+    host: smtp.example.org
+    port: 587
+    start_tls: true
+    username: openhup@example.org
+    password: ${SMTP_PASSWORD}
+    from: openhup@example.org
+    to: [me@example.org]
+    min_urgency: normal
+
+  # --------------------------------------------------------------------------- default fallback
+  # Present automatically when nothing else is configured, so notifications are never silently
+  # swallowed during setup. Useful to keep alongside the others while you are getting started.
+  log:
+    type: log
+    min_urgency: info

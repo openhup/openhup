@@ -1,0 +1,79 @@
+# Kitchen clutter buster
+#
+# The canonical OpenHup skill: notice when a surface has been covered in stuff for a while, ask for
+# it back, and close the task by itself once the camera sees it clear.
+#
+# Read the thresholds together, not separately:
+#   trigger  clutter >= 0.60 sustained 15m
+#   resolve  clutter <= 0.25 sustained 2m
+# The gap between 0.60 and 0.25 is the whole reason this produces one task instead of forty. A
+# counter hovering at 0.5 satisfies neither condition, so nothing happens - which is correct,
+# because a counter at 0.5 is a counter in use. `compile.py` refuses to save a version of this file
+# where those two ranges overlap.
+#
+# Before enabling: capture a baseline while the counter is genuinely clear
+#   curl -X POST http://localhost:8080/api/v1/anchors/kitchen.counter/baseline
+# then dry-run it against your own history
+#   curl -X POST http://localhost:8080/api/v1/skills/kitchen-clutter-buster/simulate
+
+id: kitchen-clutter-buster
+version: 1
+enabled: true
+description: Keep the kitchen counter clear during waking hours, one task at a time.
+tags: [kitchen, clutter, starter]
+
+watch:
+  - anchor: kitchen.counter
+
+signals:
+  - id: clutter
+    detector: clutter_score
+    signal: clutter_level
+    params:
+      # Compare against the anchor's stored "clean" photo. Set to `none` for a surface that has no
+      # stable tidy state (a workbench mid-project, a kid's craft table).
+      reference: baseline
+      # 0.5 is neutral. Raise it if OpenHup ignores messes you care about; lower it if a single mug
+      # sets it off. Changing this is cheaper than changing the threshold below.
+      sensitivity: 0.5
+
+conditions:
+  all:
+    # 15 minutes is deliberate: it covers unpacking shopping, cooking, and eating without
+    # complaining, while still catching "we left it and went to bed".
+    - {signal: clutter, op: gte, value: 0.6, for: 15m}
+    # Nothing during the night. Waking up to a to-do list is how people uninstall this.
+    - {time_window: {between: ["07:00", "22:00"], tz: local}}
+
+effect:
+  type: task
+  # One task at a time, house-wide, for this skill. The backlog is the enemy.
+  mode: single_task_focus
+  title_hint: clear the kitchen counter
+  # Split into three small steps. With subregions defined on the anchor this is spatial and needs
+  # no LLM at all ("just the left third"); otherwise the LLM proposes steps from what it can see.
+  micro_steps: auto:3
+  urgency: low
+  personality: kind_coach
+
+resolve:
+  conditions:
+    all:
+      - {signal: clutter, op: lte, value: 0.25, for: 2m}
+  # Leave the completed task on screen for five minutes. Small thing; it is the only moment of
+  # reward the loop has.
+  grace: 5m
+  # If you tick it off manually, take one more look. If the counter is still covered the task
+  # reopens once, gently - and then trusts you.
+  verify_on_manual_complete: true
+
+limits:
+  cooldown: 45m
+  max_per_day: 4
+  quiet_hours: {between: ["22:00", "07:00"], tz: local}
+  staleness_timeout: 15m
+
+snapshot:
+  attach: true
+  retention: 7d
+  redact: [faces]

@@ -1,0 +1,32 @@
+OpenHup
+Copyright 2026 The OpenHup Authors
+
+This product includes software developed by the OpenHup project
+(https://github.com/openhup/openhup), licensed under the Apache License,
+Version 2.0.
+
+--------------------------------------------------------------------------------
+Third-party components
+--------------------------------------------------------------------------------
+
+OpenHup depends on third-party software at runtime. These are not redistributed
+in this repository; they are fetched at install time by the package managers and
+by scripts/fetch_models.py.
+
+Machine-learning model weights are NOT included in this repository. Each entry in
+models/registry.yaml records the model's upstream source, sha256 checksum, and
+license. Operators are responsible for complying with the license of any model
+they choose to download.
+
+Notable licensing considerations:
+
+  * Default detection models (YOLOX, RT-DETR / D-FINE) are Apache-2.0.
+  * CLIP (OpenAI) reference weights are MIT-licensed.
+  * Ultralytics YOLOv8 / YOLOv11 is AGPL-3.0. It is supported only as an opt-in
+    backend and is neither a default nor vendored. Enabling it may impose AGPL
+    obligations on your deployment; OpenHup's own Apache-2.0 license does not
+    extend to it.
+  * Optional integrations (Apprise, PyAV/FFmpeg, GStreamer, OpenCV) carry their
+    own licenses (BSD-2, LGPL/GPL variants, Apache-2.0). Review these if you
+    redistribute a built image.
+--------------------------------------------------------------------------------

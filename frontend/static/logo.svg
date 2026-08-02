@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 252 64" role="img" aria-labelledby="title">
+  <title id="title">OpenHup</title>
+  <style>
+    .mark { fill: #2f6f4f; }
+    .core { fill: #ffffff; }
+    .wordmark {
+      fill: #1c1a17;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      font-weight: 700;
+    }
+    @media (prefers-color-scheme: dark) {
+      .mark { fill: #7fb896; }
+      .core { fill: #171614; }
+      .wordmark { fill: #ece9e4; }
+    }
+  </style>
+  <g transform="translate(4 4) scale(0.875)">
+    <!-- A gable-roof house whose front door is a camera lens: "the home that sees." -->
+    <path class="mark" d="M11 31 L32 8 L53 31 Z" />
+    <rect class="mark" x="13" y="30" width="38" height="28" rx="5" />
+    <circle class="mark" cx="32" cy="44" r="9.5" />
+    <circle class="core" cx="32" cy="44" r="3.75" />
+  </g>
+  <text class="wordmark" x="70" y="44" font-size="40" letter-spacing="0.5">OpenHup</text>
+</svg>

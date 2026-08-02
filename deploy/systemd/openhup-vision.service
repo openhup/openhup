@@ -1,0 +1,78 @@
+[Unit]
+Description=OpenHup vision service
+Documentation=https://github.com/openhup/openhup/blob/main/docs/HARDWARE.md
+After=network-online.target redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=openhup
+Group=openhup
+# The iGPU render node, for VA-API decode and the OpenVINO GPU plugin. Check yours with:
+#   stat -c '%G' /dev/dri/renderD128
+SupplementaryGroups=render video
+WorkingDirectory=/opt/openhup/vision-service
+EnvironmentFile=/etc/openhup/openhup.env
+Environment=PATH=/opt/openhup/vision-service/.venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=OPENHUP_MODEL_DIR=/var/lib/openhup/models
+# Two threads per session. This box does other things, and pinning every core to inference makes the
+# whole machine feel broken for no detection benefit at these cadences.
+Environment=OPENHUP_ORT_THREADS=2
+
+ExecStartPre=/opt/openhup/vision-service/.venv/bin/python -m openhup_vision.backends --info
+ExecStart=/opt/openhup/vision-service/.venv/bin/openhup-vision \
+    --config /etc/openhup/vision.yaml \
+    --config /etc/openhup/cameras.yaml
+
+Restart=always
+RestartSec=10s
+TimeoutStopSec=15s
+
+# --- Scheduling ------------------------------------------------------------------------------
+# Deliberately deprioritised. A home server should stay responsive for whatever else it does;
+# a clutter score arriving two seconds late costs nothing.
+Nice=5
+CPUSchedulingPolicy=batch
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+# Hard ceiling on total CPU. 200% = two cores. Raise it if you have many cameras and spare capacity.
+CPUQuota=200%
+MemoryMax=3G
+
+# --- Hardening -------------------------------------------------------------------------------
+# Less strict than the API's sandbox by necessity: this process needs GPU device access. Everything
+# not required for that is still closed off.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Needs /dev/dri for hardware decode and the OpenVINO GPU plugin.
+PrivateDevices=false
+DeviceAllow=/dev/dri rw
+DevicePolicy=closed
+
+ReadWritePaths=/var/lib/openhup
+
+# Cameras and Redis are on the LAN. This service has no legitimate reason to reach the internet at
+# all once models are downloaded - so it cannot.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+IPAddressAllow=192.168.0.0/16
+IPAddressAllow=10.0.0.0/8
+IPAddressAllow=172.16.0.0/12
+
+[Install]
+WantedBy=multi-user.target

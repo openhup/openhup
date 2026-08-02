@@ -1,0 +1,92 @@
+# Stove burner safety
+#
+# The skill that justifies pointing a camera at your kitchen. A burner left on with nobody in the
+# room, for ten minutes, is worth interrupting anything.
+#
+# Read this file as a study in how safety skills differ from chore skills:
+#
+#   urgency: high     -> the personality layer is bypassed entirely. Whatever voice you have
+#                        configured, this alert reads "Front-left burner has been on for 12 minutes.
+#                        No one has been in the kitchen for 9 minutes." Comedy has no place here and
+#                        openhup.llm.render enforces that in code, not by asking a model nicely.
+#   no quiet hours    -> limits.quiet_hours is absent, and even if present it would be ignored:
+#                        _suppression_reason() skips quiet hours and daily caps for high urgency.
+#   two signals       -> "burner on" alone is just cooking. "Burner on AND nobody there" is the
+#                        actual hazard. Presence gating is what makes this liveable.
+#   max_gap           -> a camera that dropped out for twenty minutes must not be able to satisfy
+#                        "on for 10m" from two samples either side of the outage. Without this, an
+#                        outage looks exactly like a hazard, and false alarms destroy trust in
+#                        precisely the skill that most needs it.
+#
+# LIMITATIONS, stated plainly. This is a helpful second pair of eyes and nothing more:
+#   - It is not a gas detector, a smoke alarm, or a safety-certified device. Fit real alarms.
+#   - CLIP-based state classification is good, not perfect. Induction hobs with no visible glow are
+#     hard; gas flames and glowing electric elements work well.
+#   - Test it deliberately (boil water, leave the room) before relying on it.
+#   - Keep `personality: brief` behaviour: never set a jokey personality here. The compiler will
+#     warn you that it would be ignored anyway.
+
+id: stove-burner-safety
+version: 1
+enabled: true
+description: Alert if a burner stays on with nobody in the kitchen.
+tags: [kitchen, safety]
+
+watch:
+  - anchor: kitchen.stove
+
+signals:
+  - id: burner
+    detector: zero_shot_state
+    signal: burner_state
+    params:
+      # Describe the states in plain, visual language. Concrete beats clever: "a lit gas burner with
+      # a blue flame" outperforms "the stove is on".
+      probes:
+        on: a lit stove burner with a visible flame or a glowing red element
+        off: an unlit stove burner with no flame and no glow
+      # If the two states score within this margin of each other, report `unknown` instead of
+      # guessing. `unknown` matches neither condition below, so ambiguity produces silence.
+      min_margin: 0.10
+
+  - id: people
+    detector: object_inventory
+    signal: person_count
+    params:
+      classes: [person]
+      min_score: 0.4
+
+conditions:
+  all:
+    - {signal: burner, op: eq, value: "on", for: 10m, max_gap: 90s}
+    # "Nobody present" expressed as an absence: no observation in the last five minutes found a
+    # person. An empty window satisfies this by design - which is safe here only because the FSM
+    # refuses to act on a verdict whose data is stale.
+    - {signal: people, op: gte, value: 1, absent_for: 5m}
+
+effect:
+  type: alert
+  urgency: high
+  channels: [ntfy, mqtt]
+  requires_ack: true
+  # Keep telling me every two minutes until I acknowledge it. For a hazard, repetition is correct.
+  repeat_every: 2m
+
+resolve:
+  conditions:
+    any:
+      - {signal: burner, op: eq, value: "off", for: 30s}
+      # Someone walked in. They can see the stove; we can stop shouting.
+      - {signal: people, op: gte, value: 1}
+
+limits:
+  # Short, because this may legitimately recur. There is no daily cap and no quiet hours: a hazard
+  # at 3am is exactly when it matters.
+  cooldown: 5m
+  staleness_timeout: 3m
+
+snapshot:
+  attach: true
+  # Kept longer than a chore snapshot - useful if you need to reconstruct what happened.
+  retention: 30d
+  redact: [faces]

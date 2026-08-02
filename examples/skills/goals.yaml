@@ -1,0 +1,76 @@
+# Goal examples.
+#
+# A goal is deliberately thin: a metric, a target, a direction, and a window. It creates no tasks and
+# sends no notifications - it only adds a line to the weekly report and a chart to the Habits view.
+#
+# Load with:
+#   for g in $(yq -o=json '.goals[]' -c examples/skills/goals.yaml); do
+#     curl -X POST localhost:8080/api/v1/metrics/goals -H 'content-type: application/json' -d "$g"
+#   done
+#
+# Goal progress is never reported as "failed". The four states are achieved, on_track, behind, and
+# learning (not enough data yet). "Behind" is information; it is not an accusation, and the weekly
+# report leads with something that went well regardless.
+#
+# Each goal needs a metric skill producing its numbers - the `metric:` field must match a
+# MetricEffect's `metric` in an enabled skill, or one of the built-ins from GET /metrics/catalog.
+
+goals:
+  # Pairs with examples/skills/more-examples.yaml → cooking-sessions
+  - id: cook-more
+    label: Cook more
+    metric: cook_sessions_per_week
+    target: 4
+    direction: up
+    window_days: 7
+    include_in_report: true
+
+  # Pairs with examples/skills/tv-time-tracking.yaml
+  #
+  # `direction: down` scores headroom under a ceiling rather than distance from zero, so a quiet week
+  # reads as achieved rather than as an unmet target. The point is a gentle downward pull, not a
+  # nightly verdict on your evening.
+  - id: less-tv
+    label: Watch less TV
+    metric: tv_on_minutes_per_day
+    target: 90
+    direction: down
+    window_days: 7
+
+  # Built-in metric: hours since the last clutter episode on an anchor. Framed forward - a break just
+  # resets the number, and nothing ever announces a broken streak.
+  - id: kitchen-stays-clear
+    label: Kitchen counter stays clear
+    metric: clean_streak_hours
+    target: 48
+    direction: up
+    window_days: 14
+    anchor_id: kitchen.counter
+
+  # Built-in. Worth having one goal about the system rather than about you: if the completion rate is
+  # low, the thresholds are probably wrong rather than you being at fault.
+  - id: tasks-are-realistic
+    label: Tasks I actually finish
+    metric: task_completion_rate
+    target: 0.7
+    direction: up
+    window_days: 14
+
+  # The anti-metric, as a goal. Notifications per completed task; lower is better. If this drifts up,
+  # a skill needs retuning - simulate it and widen the thresholds.
+  - id: dont-become-annoying
+    label: Stays out of the way
+    metric: nag_index
+    target: 1.5
+    direction: down
+    window_days: 7
+
+  # `maintain` scores closeness to a target in either direction. Useful where more is not better:
+  # taking the bin out twice a week is right, and six times means something else is wrong.
+  - id: trash-rhythm
+    label: Bin goes out on a rhythm
+    metric: trash_cycles_per_week
+    target: 2
+    direction: maintain
+    window_days: 21
+    include_in_report: false

@@ -1,0 +1,91 @@
+# ADHD micro-task shelf
+#
+# For the space that has stopped being a shelf and become a feeling. The one you have walked past
+# for three weeks because "tidy the shelf" is not a task, it is a project with no edges.
+#
+# What makes this different from the kitchen clutter skill is not the detection - it is the
+# framing. Every choice in this file exists to make the next action smaller than your resistance
+# to it:
+#
+#   single_task_focus       You are shown exactly one thing. Not a list. Never a list.
+#   micro_steps spatial     The shelf is cut into thirds and you are asked for one third. "Just
+#                           clear the left third" is a real, finishable, ten-second-decision task.
+#                           It is also *verifiable*: when that third's clutter score drops, the step
+#                           advances on its own. You do not have to report progress, argue with a
+#                           checkbox, or remember you were doing it.
+#   partial credit          Clearing one of three steps is logged as a win. The episode does not
+#                           need to complete for the work to have counted.
+#   generous cooldown       6 hours. If you clear it and it fills again the same afternoon, that is
+#                           information about your life, not a reason to be told off twice.
+#   max_per_day: 1          At most one ask per day. This space took weeks to fill; it does not
+#                           need hourly attention.
+#   auto_expire_after: 3d   If it goes unaddressed for three days the task quietly disappears
+#                           instead of aging into a monument. It will come back when the cooldown
+#                           lapses, with no reference to the fact that it was here before -
+#                           `backlog_counts` is a filtered boundary, so no personality can mention
+#                           it either.
+#   higher trigger (0.70)   A shelf is allowed to have things on it. This only fires when the
+#                           surface is genuinely gone.
+#   lenient resolve (0.40)  Deliberately *not* 0.25. "Better" ends this episode; "perfect" is not
+#                           required and asking for it is how the whole thing stops working.
+#
+# Set up the subregions first - spatial micro-steps depend on them:
+#   POST /api/v1/anchors/office.shelf  with three subregions (left/middle/right)
+# Without subregions this still works: the LLM proposes steps from the object inventory instead, or
+# falls back to "start on the shelf - just two minutes" if there is no LLM at all.
+
+id: adhd-micro-task-shelf
+version: 1
+enabled: true
+description: One tiny step at a time for the shelf, until it is a shelf again.
+tags: [focus, clutter, accessibility]
+
+watch:
+  - anchor: office.shelf
+
+signals:
+  - id: clutter
+    detector: clutter_score
+    signal: clutter_level
+    params:
+      reference: baseline
+      sensitivity: 0.4
+
+conditions:
+  all:
+    # An hour, not fifteen minutes. This is not about a moment of mess.
+    - {signal: clutter, op: gte, value: 0.7, for: 1h}
+    # Afternoon and early evening only. Not first thing, when the day already has demands, and not
+    # late, when starting something is a bad idea.
+    - {time_window: {between: ["14:00", "20:00"], tz: local}}
+
+effect:
+  type: task
+  mode: single_task_focus
+  title_hint: clear one small part of the shelf
+  micro_steps: auto:3
+  urgency: low
+  personality: kind_coach
+
+resolve:
+  conditions:
+    all:
+      - {signal: clutter, op: lte, value: 0.4, for: 5m}
+  grace: 10m
+  # If you say it is done, it is done. No arguing on this skill in particular.
+  verify_on_manual_complete: false
+  auto_expire_after: 3d
+
+limits:
+  cooldown: 6h
+  max_per_day: 1
+  quiet_hours: {between: ["20:00", "14:00"], tz: local}
+  staleness_timeout: 30m
+
+snapshot:
+  attach: true
+  # Before/after pairs are kept for a month here, on purpose. Seeing the "after" from three weeks
+  # ago is the single most motivating thing this system produces.
+  mode: archive
+  retention: 30d
+  redact: [faces, screens]

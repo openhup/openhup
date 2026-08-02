@@ -1,0 +1,61 @@
+[project]
+name = "openhup-vision"
+version = "0.1.0"
+description = "OpenHup vision service: frame ingestion, detector graph, observation emission."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+dependencies = [
+    "openhup-schemas",
+    "numpy>=1.26",
+    "pyyaml>=6.0",
+    "httpx>=0.28",
+    "redis>=5.2",
+    "paho-mqtt>=2.1",
+    "pydantic>=2.9,<3",
+    "pydantic-settings>=2.6",
+    "structlog>=24.4",
+]
+
+[project.optional-dependencies]
+# Inference. Pick exactly one execution provider extra; they conflict on the ORT package.
+cpu = ["onnxruntime>=1.20", "opencv-python-headless>=4.10", "av>=13.0", "Pillow>=11.0"]
+openvino = ["onnxruntime-openvino>=1.20", "opencv-python-headless>=4.10", "av>=13.0", "Pillow>=11.0"]
+cuda = ["onnxruntime-gpu>=1.20", "opencv-python-headless>=4.10", "av>=13.0", "Pillow>=11.0"]
+# Optional: open-vocabulary detection and pose. Heavier, and only needed by opt-in detectors.
+openvocab = ["transformers>=4.46", "torch>=2.5"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    # Only needed so the snapshot/redaction tests can run without a full OpenCV install.
+    "Pillow>=11.0",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "pytest-asyncio>=1.4.0",
+]
+
+[project.scripts]
+openhup-vision = "openhup_vision.main:run"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["openhup_vision"]
+
+[tool.uv.sources]
+openhup-schemas = { path = "../packages/openhup-schemas", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]

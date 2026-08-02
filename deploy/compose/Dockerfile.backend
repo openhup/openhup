@@ -1,0 +1,60 @@
+# OpenHup backend (API + engine).
+#
+# Both processes ship in one image because they are one codebase with two entrypoints; the compose
+# file picks which to run. Multi-stage so the runtime layer carries no build tooling.
+
+FROM python:3.12-slim AS build
+
+# uv for fast, lockfile-respecting installs.
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never
+
+WORKDIR /build
+
+# Dependency metadata first: this layer is cached until the dependency set actually changes, which
+# is what keeps a code-only rebuild down to a couple of seconds.
+COPY packages/openhup-schemas/pyproject.toml packages/openhup-schemas/README.md ./packages/openhup-schemas/
+COPY packages/openhup-schemas/openhup_schemas ./packages/openhup-schemas/openhup_schemas
+COPY backend/pyproject.toml backend/README.md ./backend/
+
+WORKDIR /build/backend
+RUN uv venv /opt/venv && VIRTUAL_ENV=/opt/venv uv pip install --no-cache -e ../packages/openhup-schemas -e .
+
+COPY backend/openhup ./openhup
+COPY backend/alembic.ini ./alembic.ini
+RUN VIRTUAL_ENV=/opt/venv uv pip install --no-cache --no-deps -e .
+
+# ------------------------------------------------------------------------------------------
+FROM python:3.12-slim AS runtime
+
+# curl is only for healthchecks and debugging; nothing else is added.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --create-home --uid 10001 openhup
+
+COPY --from=build /opt/venv /opt/venv
+COPY --from=build /build /app
+
+ENV PATH="/opt/venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    OPENHUP_CONFIG=/etc/openhup/config.yaml
+
+WORKDIR /app/backend
+
+# Snapshots and state are volumes; create them so the container works even unmounted.
+RUN mkdir -p /var/lib/openhup/snapshots && chown -R openhup:openhup /var/lib/openhup
+
+# Unprivileged. The API needs no root, and this container may hold imagery of someone's home.
+USER openhup
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8080/healthz || exit 1
+
+CMD ["uvicorn", "openhup.api.main:application", "--factory", "--host", "0.0.0.0", "--port", "8080"]

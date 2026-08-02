@@ -1,0 +1,250 @@
+# OpenHup - Docker Compose stack.
+#
+#   cp ../env/openhup.env.example ../env/openhup.env   # then edit it
+#   docker compose --profile cpu --profile ollama up -d
+#
+# PROFILES. Pick exactly one inference profile; they install conflicting onnxruntime builds.
+#   cpu        works anywhere, slowest
+#   openvino   Intel iGPU (N100, NUC) - the sweet spot for a home box
+#   cuda       NVIDIA
+# And optionally:
+#   ollama     run a local LLM alongside (skip it to use templates or a remote provider)
+#   proxy      Caddy with automatic TLS, for remote access
+#
+# WHAT IS EXPOSED. By default only Caddy (in the `proxy` profile) publishes a port, and the API binds
+# to 127.0.0.1 inside its container network. Nothing here opens a port to the internet, nothing calls
+# home, and there is no telemetry. Read docs/SECURITY_PRIVACY.md before changing that.
+
+name: openhup
+
+x-common: &common
+  restart: unless-stopped
+  env_file: ../env/openhup.env
+  networks: [openhup]
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+services:
+  postgres:
+    <<: *common
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-openhup}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in openhup.env}
+      POSTGRES_DB: ${POSTGRES_DB:-openhup}
+      # Slightly tuned for a home box: this is not a busy OLTP database, but the observation table
+      # is append-heavy and benefits from a larger WAL.
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    command:
+      - postgres
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - work_mem=16MB
+      - -c
+      - max_wal_size=2GB
+      - -c
+      - checkpoint_timeout=15min
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-openhup} -d ${POSTGRES_DB:-openhup}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    <<: *common
+    image: redis:7-alpine
+    # AOF everysec: a crash can lose about a second of observations, which is invisible (the next
+    # sample arrives in seconds). Tasks and alerts live in Postgres, so nothing user-visible is at
+    # risk here. See ADR-002.
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - noeviction
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  api:
+    <<: *common
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.backend
+    command: >
+      uvicorn openhup.api.main:application --factory
+      --host 0.0.0.0 --port 8080 --proxy-headers --forwarded-allow-ips=*
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    volumes:
+      - ../../config:/etc/openhup:ro
+      - openhup-state:/var/lib/openhup
+      - snapshots:/var/lib/openhup/snapshots
+    # Published on loopback only. Put Caddy (profile `proxy`) or your own reverse proxy in front
+    # before exposing this to a LAN, and read the threat model first.
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # Runs migrations, then exits. `docker compose up` waits for it via the api's depends_on.
+  migrate:
+    <<: *common
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.backend
+    command: alembic upgrade head
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+    volumes:
+      - ../../config:/etc/openhup:ro
+
+  engine:
+    <<: *common
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.backend
+    command: python -m openhup.engine
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    volumes:
+      - ../../config:/etc/openhup:ro
+      - openhup-state:/var/lib/openhup
+      - snapshots:/var/lib/openhup/snapshots
+    # Scaling this to 2 would double every task. The engine holds a Redis leader lock, so a second
+    # replica idles as a warm standby rather than causing damage - but there is no reason to run one
+    # on a single box.
+    deploy:
+      replicas: 1
+
+  # ---------------------------------------------------------------- vision, one profile only
+  vision-cpu:
+    <<: *common
+    profiles: [cpu]
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.vision
+      args: { EXTRA: cpu }
+    command: openhup-vision --config /etc/openhup/vision.yaml --config /etc/openhup/cameras.yaml
+    depends_on:
+      redis: { condition: service_healthy }
+    volumes:
+      - ../../config:/etc/openhup:ro
+      - ../../models:/models
+      - snapshots:/var/lib/openhup/snapshots
+    environment:
+      OPENHUP_MODEL_DIR: /models
+      OPENHUP_ORT_THREADS: ${ORT_THREADS:-2}
+
+  vision-openvino:
+    <<: *common
+    profiles: [openvino]
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.vision
+      args: { EXTRA: openvino }
+    command: openhup-vision --config /etc/openhup/vision.yaml --config /etc/openhup/cameras.yaml
+    depends_on:
+      redis: { condition: service_healthy }
+    # The iGPU. `render` group id varies by distro: check `stat -c '%g' /dev/dri/renderD128`.
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - ${RENDER_GID:-109}
+    volumes:
+      - ../../config:/etc/openhup:ro
+      - ../../models:/models
+      - snapshots:/var/lib/openhup/snapshots
+    environment:
+      OPENHUP_MODEL_DIR: /models
+
+  vision-cuda:
+    <<: *common
+    profiles: [cuda]
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.vision
+      args: { EXTRA: cuda }
+    command: openhup-vision --config /etc/openhup/vision.yaml --config /etc/openhup/cameras.yaml
+    depends_on:
+      redis: { condition: service_healthy }
+    volumes:
+      - ../../config:/etc/openhup:ro
+      - ../../models:/models
+      - snapshots:/var/lib/openhup/snapshots
+    environment:
+      OPENHUP_MODEL_DIR: /models
+      NVIDIA_VISIBLE_DEVICES: all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # ---------------------------------------------------------------- optional extras
+  ollama:
+    <<: *common
+    profiles: [ollama]
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-models:/root/.ollama
+    # Not published: only OpenHup's own containers need to reach it, and an unauthenticated LLM
+    # endpoint on your LAN is not something to hand out.
+    expose:
+      - "11434"
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  caddy:
+    <<: *common
+    profiles: [proxy]
+    image: caddy:2-alpine
+    depends_on: [api]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ../caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+networks:
+  openhup:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  openhup-state:
+  # Snapshots are imagery of the inside of your home. Consider putting this on an encrypted
+  # filesystem - docs/SECURITY_PRIVACY.md has the LUKS notes.
+  snapshots:
+  ollama-models:
+  caddy-data:
+  caddy-config:

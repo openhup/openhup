@@ -1,0 +1,166 @@
+# Camera and anchor configuration.
+#
+# Copy to /etc/openhup/cameras.yaml and edit. Reloaded on change; the vision service pulls its
+# detector plan from the backend, so adding an anchor here does not need a restart.
+#
+# Passwords are NEVER in this file. `password_env` names an environment variable, so this file stays
+# safe to commit, diff, and paste into a bug report. Put the actual values in deploy/env/*.env,
+# which is gitignored.
+#
+# Two habits that matter more than anything else in this file:
+#
+# 1. USE THE SUBSTREAM FOR DETECTION. Every commodity IP camera serves a second, low-resolution
+#    stream. Decoding 4K at 5fps to find a coffee mug is the single most common way people melt a
+#    home server; 640x360 is plenty for clutter and object detection. Point `substream_url` at it
+#    and OpenHup will use it automatically, keeping `url` for the snapshots humans look at.
+#
+# 2. PUT CAMERAS ON A VLAN WITH NO INTERNET ROUTE. Cheap camera firmware is the weakest thing on
+#    your network. OpenHup only needs to reach them from the vision host; they need to reach nothing.
+#    See docs/SECURITY_PRIVACY.md.
+
+cameras:
+  - id: kitchen
+    name: Kitchen
+    kind: rtsp
+    # Main stream: used for snapshots attached to tasks and alerts.
+    url: rtsp://192.168.20.11:554/cam/realmonitor?channel=1&subtype=0
+    # Detect stream: 640x360, ~5fps. This is the one that runs all day.
+    substream_url: rtsp://192.168.20.11:554/cam/realmonitor?channel=1&subtype=1
+    username: openhup
+    password_env: KITCHEN_CAM_PASSWORD
+    transport: tcp
+    max_fps: 5
+    # none | vaapi | qsv | cuda. On an N100 mini PC, `vaapi` moves decode off the CPU entirely.
+    hwaccel: vaapi
+    timezone: Europe/Lisbon
+
+  - id: living
+    name: Living room
+    kind: rtsp
+    url: rtsp://192.168.20.12:554/stream1
+    substream_url: rtsp://192.168.20.12:554/stream2
+    username: openhup
+    password_env: LIVING_CAM_PASSWORD
+    max_fps: 3
+    hwaccel: vaapi
+    # A camera-level privacy floor: everything from this camera is redacted before it hits disk,
+    # regardless of what any individual skill asks for. Sensible for a room people relax in.
+    always_redact: [faces, screens]
+
+  - id: office
+    name: Office
+    kind: usb
+    # USB and CSI cameras are reached through a camera-agent running on the host that owns the
+    # device. See camera-agents/python-agent.
+    device: /dev/video0
+    max_fps: 2
+    agent_id: office-pi
+
+  - id: hall
+    name: Hallway
+    kind: snapshot_url
+    # Cheap ESP32-CAM style device serving a periodic still. Fine for binary states like
+    # "is the door open"; useless for clutter scoring.
+    url: http://192.168.20.31/capture
+    max_fps: 0.5
+
+  # Already running Frigate? Consume its detections instead of decoding every stream twice. This is
+  # the cheapest way to add OpenHup to an existing homelab - see docs/INSTALL.md.
+  # - id: garage
+  #   name: Garage
+  #   kind: frigate
+  #   frigate_camera: garage
+
+# ---------------------------------------------------------------------------------------------
+# Anchors: the named regions that skills actually watch.
+#
+# Polygons are normalised 0..1 coordinates, so they survive a resolution change. Draw them in the UI
+# (Cameras -> anchor -> edit region) rather than by hand; the numbers below are illustrative.
+#
+# An anchor without a polygon watches the whole frame. That is usually a mistake: a tight region
+# means less compute, fewer false positives, and far less imagery on disk.
+
+anchors:
+  - id: kitchen.counter
+    camera_id: kitchen
+    label: Kitchen counter
+    polygon: [[0.05, 0.34], [0.94, 0.30], [0.96, 0.78], [0.04, 0.82]]
+    # Subregions enable *spatial* micro-tasking: "just clear the left third". Ordered, and each one
+    # is independently scored, so progress advances without the user reporting anything.
+    subregions:
+      - {id: left, label: Left third, order: 0, polygon: [[0.05, 0.34], [0.35, 0.33], [0.35, 0.80], [0.04, 0.82]]}
+      - {id: middle, label: Middle third, order: 1, polygon: [[0.35, 0.33], [0.65, 0.32], [0.65, 0.79], [0.35, 0.80]]}
+      - {id: right, label: Right third, order: 2, polygon: [[0.65, 0.32], [0.94, 0.30], [0.96, 0.78], [0.65, 0.79]]}
+    # Weights for the three fused clutter components. A small, close countertop benefits from more
+    # object density; a wide room shot from more baseline difference. These are relative and get
+    # normalised, so 2/1/1 and 0.5/0.25/0.25 are the same thing.
+    clutter_weights: {baseline_diff: 0.35, object_density: 0.45, semantic: 0.20}
+    sensitivity: 0.5
+    tags: [surface, kitchen]
+
+  - id: kitchen.stove
+    camera_id: kitchen
+    label: Stove top
+    polygon: [[0.10, 0.12], [0.48, 0.10], [0.50, 0.34], [0.08, 0.36]]
+    detector_overrides:
+      # Safety signals get looked at more often than chores. Cost is acceptable on a small region.
+      - detector: zero_shot_state
+        min_interval: 10s
+    tags: [safety, kitchen]
+
+  - id: kitchen.sink
+    camera_id: kitchen
+    label: Sink and dish rack
+    polygon: [[0.52, 0.10], [0.90, 0.12], [0.92, 0.34], [0.54, 0.32]]
+    tags: [kitchen]
+
+  - id: kitchen.trash
+    camera_id: kitchen
+    label: Kitchen bin
+    polygon: [[0.02, 0.60], [0.20, 0.58], [0.22, 0.96], [0.02, 0.98]]
+    tags: [kitchen]
+
+  - id: kitchen.pet_bowl
+    camera_id: kitchen
+    label: Pet water bowl
+    polygon: [[0.72, 0.82], [0.90, 0.82], [0.90, 0.98], [0.72, 0.98]]
+    tags: [pets]
+
+  - id: kitchen.pantry
+    camera_id: kitchen
+    label: Pantry bread shelf
+    polygon: [[0.24, 0.02], [0.46, 0.02], [0.46, 0.10], [0.24, 0.10]]
+    detector_overrides:
+      # Open-vocabulary detection is expensive and bread is not fast-moving.
+      - detector: presence_absence
+        min_interval: 10m
+    tags: [supplies]
+
+  - id: office.shelf
+    camera_id: office
+    label: Office shelf
+    polygon: [[0.08, 0.20], [0.92, 0.20], [0.92, 0.62], [0.08, 0.62]]
+    subregions:
+      - {id: left, label: Left third, order: 0, polygon: [[0.08, 0.20], [0.36, 0.20], [0.36, 0.62], [0.08, 0.62]]}
+      - {id: middle, label: Middle third, order: 1, polygon: [[0.36, 0.20], [0.64, 0.20], [0.64, 0.62], [0.36, 0.62]]}
+      - {id: right, label: Right third, order: 2, polygon: [[0.64, 0.20], [0.92, 0.20], [0.92, 0.62], [0.64, 0.62]]}
+    # Lower sensitivity: a shelf is allowed to have things on it.
+    sensitivity: 0.4
+    tags: [surface, focus]
+
+  - id: living.tv
+    camera_id: living
+    label: TV
+    polygon: [[0.30, 0.15], [0.72, 0.15], [0.72, 0.48], [0.30, 0.48]]
+    tags: [habit]
+
+  - id: living.walkway
+    camera_id: living
+    label: Hallway floor
+    polygon: [[0.10, 0.62], [0.90, 0.62], [0.96, 0.98], [0.04, 0.98]]
+    tags: [safety, floor]
+
+  - id: hall.front_door
+    camera_id: hall
+    label: Front door
+    tags: [entry, safety]

@@ -1,0 +1,62 @@
+[Unit]
+Description=OpenHup skill engine
+Documentation=https://github.com/openhup/openhup/blob/main/docs/DEVELOPERS.md
+After=network-online.target postgresql.service redis-server.service openhup-api.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=exec
+User=openhup
+Group=openhup
+WorkingDirectory=/opt/openhup/backend
+EnvironmentFile=/etc/openhup/openhup.env
+Environment=OPENHUP_CONFIG=/etc/openhup/config.yaml
+Environment=PATH=/opt/openhup/backend/.venv/bin:/usr/local/bin:/usr/bin:/bin
+
+ExecStart=/opt/openhup/backend/.venv/bin/python -m openhup.engine
+
+Restart=always
+RestartSec=5s
+# The engine holds a Redis leader lock, so a restart loop cannot produce duplicate tasks - a second
+# instance idles as a standby. Only ever run one of these per deployment regardless.
+TimeoutStopSec=20s
+
+# --- Hardening -------------------------------------------------------------------------------
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectProc=invisible
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+ReadWritePaths=/var/lib/openhup
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+IPAddressAllow=192.168.0.0/16
+IPAddressAllow=10.0.0.0/8
+IPAddressAllow=172.16.0.0/12
+# The engine is what sends notifications. If your notification channel is on the internet (ntfy.sh,
+# Discord, a remote Matrix homeserver), it needs egress - so either allow it here, or self-host the
+# channel and keep this closed.
+# IPAddressAllow=any
+
+MemoryMax=1G
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

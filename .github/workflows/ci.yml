@@ -1,0 +1,195 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_PYTHON_DOWNLOADS: never
+
+jobs:
+  # The whole point of the pure-core design: the interesting logic is testable with no services,
+  # no GPU, and no cameras. This job is the proof, and it is the one that must stay fast.
+  test:
+    name: test (${{ matrix.component }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: schemas
+            path: packages/openhup-schemas
+          - component: backend
+            path: backend
+          - component: vision
+            path: vision-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Sync
+        working-directory: ${{ matrix.path }}
+        run: uv sync
+      - name: Test
+        working-directory: ${{ matrix.path }}
+        run: uv run pytest -q
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: astral-sh/setup-uv@v5
+        with: { enable-cache: true }
+      - run: cd backend && uv sync && uv run ruff check . && uv run ruff format --check .
+      - run: cd vision-service && uv sync && uv run ruff check . && uv run ruff format --check .
+
+  frontend:
+    name: frontend typecheck + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install with the committed lockfile
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        working-directory: frontend
+        run: pnpm check
+      - name: Build
+        working-directory: frontend
+        run: pnpm build
+
+  typecheck:
+    name: mypy strict (engine core)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: astral-sh/setup-uv@v5
+        with: { enable-cache: true }
+      - run: cd backend && uv sync && uv run mypy openhup/skills
+
+  # Docs and examples are documentation that runs. A broken example is worse than a missing one:
+  # somebody copies it, it silently misbehaves, and they conclude the tool is unreliable.
+  docs-and-examples:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: astral-sh/setup-uv@v5
+        with: { enable-cache: true }
+      - name: Every YAML and JSON block in the docs must parse
+        run: uv run --with pyyaml scripts/check_docs_blocks.py
+      - name: Every shipped example skill must compile
+        run: |
+          cd backend && uv sync
+          uv run openhup-cli lint ../examples/skills --cameras ../examples/cameras/cameras.yaml
+      - name: Config examples must validate
+        run: |
+          cd backend
+          uv run openhup-cli check-config \
+            --config ../config/config.yaml.example \
+            --cameras ../examples/cameras/cameras.yaml \
+            --personalities ../examples/personalities/personalities.yaml \
+            --vision ../config/vision.yaml.example
+
+  migrations:
+    name: migrations apply cleanly
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: openhup
+          POSTGRES_PASSWORD: openhup
+          POSTGRES_DB: openhup
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: astral-sh/setup-uv@v5
+        with: { enable-cache: true }
+      - name: Upgrade, then downgrade, then upgrade again
+        working-directory: backend
+        env:
+          OPENHUP__DATABASE__URL: postgresql+asyncpg://openhup:openhup@127.0.0.1:5432/openhup
+        run: |
+          uv sync
+          uv run alembic upgrade head
+          uv run alembic downgrade base
+          uv run alembic upgrade head
+
+  docker:
+    name: images build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Backend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/compose/Dockerfile.backend
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Vision (cpu)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/compose/Dockerfile.vision
+          build-args: EXTRA=cpu
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Compose file is valid
+        run: docker compose -f deploy/compose/docker-compose.yml config -q
+        env:
+          POSTGRES_PASSWORD: ci-placeholder
+
+  # Model weights are licensed separately and some are AGPL-adjacent. This job fails if a weights
+  # file is ever committed, which is the mistake that would quietly change the project's licence
+  # position (ADR-004).
+  licence-hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No model weights in the repository
+        run: |
+          found=$(git ls-files | grep -E '\.(onnx|pt|pth|safetensors|engine|bin)$' || true)
+          if [ -n "$found" ]; then
+            echo "Model weights must not be committed. Found:"; echo "$found"; exit 1
+          fi
+      - name: Every model in the registry records a licence
+        run: |
+          python3 - <<'PY'
+          import sys, yaml
+          reg = yaml.safe_load(open("models/registry.yaml"))
+          missing = [m["id"] for m in reg["models"] if not m.get("licence")]
+          if missing:
+              sys.exit(f"models without a recorded licence: {missing}")
+          print(f"{len(reg['models'])} models, all with licences recorded")
+          PY

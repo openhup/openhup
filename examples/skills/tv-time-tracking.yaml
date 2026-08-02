@@ -1,0 +1,70 @@
+# TV time tracking  ("help me watch less TV")
+#
+# A habit skill, and the most important thing about it is what it does NOT do: it never creates a
+# task, never sends a notification, and never comments on your evening. `effect.type: metric` means
+# the only output is a number on a chart and a line in the weekly report.
+#
+# This matters. A system that watched your television and then had opinions about it would be
+# intolerable, and would be switched off inside a week. Measurement first; the human decides what
+# to do with the measurement.
+#
+# How the number is built:
+#   `screen_on` is a boolean sampled every 30s. Each trigger->resolve cycle is one episode, and
+#   `aggregation: duration_minutes` sums episode length into a daily bucket. The 5-minute resolve
+#   window means an ad break or a pause does not split one evening into six sessions.
+#
+# Pair it with a goal (examples/skills/goals.yaml) to get progress in the weekly report:
+#   metric: tv_on_minutes_per_day, target: 90, direction: down
+#
+# Privacy, deliberately:
+#   - The `screen_on` detector measures brightness and temporal variance in the screen region. It
+#     is architecturally incapable of telling what you are watching, and no content-classification
+#     detector ships with OpenHup.
+#   - `snapshot.attach: false` - nothing is written to disk at all. There is no reason to keep a
+#     photograph of your living room in the evening, so we do not.
+#   - `redact: [screens, faces]` is set anyway, as a floor for any other skill sharing this anchor.
+
+id: tv-time-tracking
+version: 1
+enabled: true
+description: Measure daily screen time. No tasks, no alerts, no opinions.
+tags: [habit, living-room, metric]
+
+watch:
+  - anchor: living.tv
+
+signals:
+  - id: screen
+    detector: screen_on
+    signal: screen_on
+
+conditions:
+  # Two minutes, so switching on to check something does not register as an evening.
+  - signal: screen
+    op: eq
+    value: true
+    for: 2m
+
+effect:
+  type: metric
+  metric: tv_on_minutes_per_day
+  aggregation: duration_minutes
+  unit: min
+  bucket: 1d
+
+resolve:
+  conditions:
+    all:
+      # Five minutes off before the session is considered over: pauses, ad breaks, and getting up
+      # for tea all belong to the same viewing session.
+      - {signal: screen, op: eq, value: false, for: 5m}
+
+limits:
+  # Sessions can start again immediately; this is measurement, not moderation.
+  cooldown: 1m
+  staleness_timeout: 10m
+
+snapshot:
+  attach: false
+  mode: ephemeral
+  redact: [screens, faces]

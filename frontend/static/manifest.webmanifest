@@ -1,0 +1,17 @@
+{
+  "name": "OpenHup",
+  "short_name": "OpenHup",
+  "description": "A self-hosted home assistant that turns what cameras see into tasks.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#171614",
+  "theme_color": "#2f6f4f",
+  "icons": [
+    {
+      "src": "favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

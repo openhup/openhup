@@ -1,0 +1,303 @@
+# Further skill examples, one YAML document each.
+#
+# Load the lot with:  openhup-cli skills import examples/skills/more-examples.yaml
+# Or lint without a server:  openhup-cli skills lint examples/skills/
+#
+# These are shorter than the four annotated examples; the patterns they demonstrate are noted at the
+# top of each.
+
+# ---------------------------------------------------------------------------------------------
+# Pattern: a slow-burn threshold. "Full" is not interesting; "full for hours" is.
+---
+id: trash-full
+description: Take the bin out once it has been full for a while.
+tags: [kitchen, chore]
+watch:
+  - anchor: kitchen.trash
+signals:
+  - id: fill
+    detector: fill_level
+    signal: fill_level
+    params: {container: kitchen trash can}
+  - id: overflowing
+    detector: fill_level
+    signal: overflowing
+    params: {container: kitchen trash can}
+conditions:
+  any:
+    # Full for two hours: you know, you are busy, fine.
+    - {signal: fill, op: gte, value: 0.85, for: 2h}
+    # Actually overflowing: that is a today problem.
+    - {signal: overflowing, op: eq, value: true, for: 10m}
+effect:
+  type: task
+  title_hint: take the trash out
+  urgency: normal
+  micro_steps: none
+resolve:
+  conditions:
+    all:
+      - {signal: fill, op: lte, value: 0.3, for: 1m}
+  grace: 2m
+limits: {cooldown: 4h, max_per_day: 2, quiet_hours: {between: ["21:00", "08:00"], tz: local}}
+snapshot: {attach: true, retention: 3d, redact: [faces]}
+
+# ---------------------------------------------------------------------------------------------
+# Pattern: presence of an *absence*. Nothing is wrong with the picture except what is missing.
+# Also: a long detector interval, because open-vocabulary detection is expensive and bread does not
+# move quickly.
+---
+id: low-on-bread
+description: Notice when the bread shelf is empty, so it lands on the shopping list.
+tags: [kitchen, supplies]
+watch:
+  - anchor: kitchen.pantry
+signals:
+  - id: bread
+    detector: presence_absence
+    signal: bread_present
+    params: {query: a loaf of bread or a bread bag, min_score: 0.25}
+conditions:
+  all:
+    # Half a day of no bread. Short enough to be useful before the shop, long enough that a loaf on
+    # the counter mid-sandwich does not trigger it.
+    - {signal: bread, op: eq, value: false, for: 12h}
+effect:
+  type: task
+  title_hint: add bread to the shopping list
+  urgency: low
+  micro_steps: none
+resolve:
+  conditions:
+    all:
+      - {signal: bread, op: eq, value: true, for: 5m}
+  # Nothing visual confirms "I wrote it down", so allow ticking it off directly too.
+  verify_on_manual_complete: false
+limits: {cooldown: 12h, max_per_day: 1}
+snapshot: {attach: true, retention: 2d}
+
+# ---------------------------------------------------------------------------------------------
+# Pattern: count_over. One empty bowl is life; three in a day is a habit worth surfacing.
+---
+id: pet-bowl-empty
+description: Refill the water bowl, and notice if it keeps running dry.
+tags: [pets, chore]
+watch:
+  - anchor: kitchen.pet_bowl
+signals:
+  - id: bowl
+    detector: fill_level
+    signal: fill_level
+    params: {container: pet water bowl}
+conditions:
+  all:
+    - {signal: bowl, op: lte, value: 0.15, for: 10m}
+effect:
+  type: task
+  title_hint: refill the water bowl
+  urgency: normal
+  micro_steps: none
+  # Pets do not wait for waking hours.
+  channels: [ntfy]
+resolve:
+  conditions:
+    all:
+      - {signal: bowl, op: gte, value: 0.6, for: 1m}
+  grace: 1m
+limits: {cooldown: 2h, max_per_day: 4}
+snapshot: {attach: true, retention: 2d}
+
+# ---------------------------------------------------------------------------------------------
+# Pattern: the same signal, tracked instead of nagged about. Companion metric to the skill above.
+---
+id: pet-bowl-habit
+description: How often does the bowl run dry? Measurement only.
+tags: [pets, metric]
+watch:
+  - anchor: kitchen.pet_bowl
+signals:
+  - id: bowl
+    detector: fill_level
+    signal: fill_level
+    params: {container: pet water bowl}
+conditions:
+  all:
+    - {signal: bowl, op: lte, value: 0.15, count_over: {window: 1d, n: 3}}
+effect:
+  type: metric
+  metric: bowl_empty_events_per_day
+  aggregation: episodes
+  bucket: 1d
+resolve:
+  conditions:
+    all:
+      - {signal: bowl, op: gte, value: 0.6, for: 10m}
+snapshot: {attach: false, mode: ephemeral}
+
+# ---------------------------------------------------------------------------------------------
+# Pattern: a safety skill that is not urgent enough for `high`. Normal urgency keeps the
+# personality, because a blocked hallway is worth mentioning warmly rather than alarmingly.
+---
+id: walkway-clear
+description: Keep the hallway walkable - trip hazards, not tidiness.
+tags: [safety, accessibility]
+watch:
+  - anchor: living.walkway
+signals:
+  - id: path
+    detector: walkway_clear
+    signal: walkway_clear
+  - id: blocked_area
+    detector: walkway_clear
+    signal: obstruction_area
+conditions:
+  all:
+    - {signal: path, op: eq, value: false, for: 20m}
+    - {signal: blocked_area, op: gte, value: 0.15}
+effect:
+  type: task
+  title_hint: clear the hallway floor
+  urgency: normal
+  micro_steps: auto:2
+resolve:
+  conditions:
+    all:
+      - {signal: path, op: eq, value: true, for: 2m}
+  grace: 2m
+limits: {cooldown: 2h, max_per_day: 3}
+snapshot: {attach: true, retention: 7d, redact: [faces]}
+
+# ---------------------------------------------------------------------------------------------
+# Pattern: changed_to. The event matters, the steady state does not - a door already open when the
+# skill was enabled must not fire.
+---
+id: front-door-left-open
+description: Say something if the front door is left open.
+tags: [safety, entry]
+watch:
+  - anchor: hall.front_door
+signals:
+  - id: door
+    detector: door_state
+    signal: door_state
+conditions:
+  all:
+    - {signal: door, op: eq, value: open, for: 5m}
+effect:
+  type: alert
+  urgency: normal
+  title_hint: front door is open
+  channels: [ntfy]
+  requires_ack: false
+resolve:
+  conditions:
+    all:
+      - {signal: door, op: eq, value: closed, for: 30s}
+limits: {cooldown: 10m}
+snapshot: {attach: true, retention: 14d, redact: [faces]}
+
+# ---------------------------------------------------------------------------------------------
+# Pattern: "help me cook more". A goal expressed as measurement, with the goal itself living in
+# goals.yaml. Note the 8-minute sustain: boiling a kettle is not cooking.
+---
+id: cooking-sessions
+description: Count real cooking sessions, to support a "cook more" goal.
+tags: [habit, kitchen, metric]
+watch:
+  - anchor: kitchen.stove
+signals:
+  - id: burner
+    detector: zero_shot_state
+    signal: burner_state
+    params:
+      probes:
+        on: a lit stove burner with a visible flame or a glowing element
+        off: an unlit stove burner
+conditions:
+  all:
+    - {signal: burner, op: eq, value: "on", for: 8m}
+effect:
+  type: metric
+  metric: cook_sessions_per_week
+  aggregation: episodes
+  bucket: 7d
+resolve:
+  conditions:
+    all:
+      - {signal: burner, op: eq, value: "off", for: 10m}
+snapshot: {attach: false, mode: ephemeral}
+
+# ---------------------------------------------------------------------------------------------
+# Pattern: a chore whose "done" state is the absence of the thing. Also demonstrates a skill that
+# resolves on a *different* signal from the one that triggered it.
+---
+id: dish-rack-full
+description: Put the dishes away once the rack has been full for a while.
+tags: [kitchen, chore]
+watch:
+  - anchor: kitchen.sink
+signals:
+  - id: rack
+    detector: fill_level
+    signal: fill_level
+    params: {container: dish drying rack}
+  - id: items
+    detector: object_inventory
+    signal: object_count
+conditions:
+  all:
+    - {signal: rack, op: gte, value: 0.6, for: 3h}
+    - {signal: items, op: gte, value: 3}
+effect:
+  type: task
+  title_hint: put the clean dishes away
+  urgency: low
+  micro_steps: none
+  personality: deadpan_butler
+resolve:
+  conditions:
+    all:
+      - {signal: items, op: lte, value: 1, for: 2m}
+  grace: 3m
+limits: {cooldown: 6h, max_per_day: 2, quiet_hours: {between: ["22:00", "08:00"], tz: local}}
+snapshot: {attach: true, retention: 3d}
+
+# ---------------------------------------------------------------------------------------------
+# Pattern: critical urgency, `personality: brief`, and an explicit opt-in detector.
+#
+# READ THIS BEFORE ENABLING. Fall detection here is a best-effort signal from a pose model. It is
+# not a medical device, it will miss falls, and it will occasionally flag someone doing yoga. Use it
+# as one input among several - never as the only thing standing between a person and help. If
+# somebody's safety genuinely depends on this, buy a certified device.
+---
+id: fall-detection
+enabled: false
+description: Alert if a person is on the floor and not moving. Opt-in, best-effort.
+tags: [safety, opt-in]
+personality: brief
+watch:
+  - anchor: living.walkway
+signals:
+  - id: down
+    detector: pose_fall
+    signal: person_down
+  - id: motion
+    detector: pose_fall
+    signal: motion_level
+conditions:
+  all:
+    - {signal: down, op: eq, value: true, for: 30s}
+    - {signal: motion, op: lte, value: 0.05, for: 30s}
+effect:
+  type: alert
+  urgency: critical
+  channels: [ntfy, sms_webhook]
+  requires_ack: true
+  repeat_every: 1m
+resolve:
+  conditions:
+    any:
+      - {signal: down, op: eq, value: false, for: 10s}
+      - {signal: motion, op: gte, value: 0.2}
+limits: {cooldown: 2m, staleness_timeout: 1m}
+snapshot: {attach: true, retention: 30d, redact: [faces]}

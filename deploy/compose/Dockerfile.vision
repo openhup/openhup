@@ -1,0 +1,77 @@
+# OpenHup vision service.
+#
+# The EXTRA build arg selects the inference stack. Exactly one, because the extras install
+# conflicting onnxruntime distributions:
+#
+#   --build-arg EXTRA=cpu        works anywhere
+#   --build-arg EXTRA=openvino   Intel iGPU (N100, NUC)
+#   --build-arg EXTRA=cuda       NVIDIA (run on a CUDA base image for production use)
+#
+# Model weights are NOT baked in. They are licensed separately, some are large, and pinning them
+# into an image makes the licence position of that image ambiguous. Mount /models and fetch them
+# with `python -m openhup_vision.backends --fetch`. See models/registry.yaml and ADR-004.
+
+ARG EXTRA=cpu
+
+FROM python:3.12-slim AS build
+ARG EXTRA
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never
+
+WORKDIR /build
+
+COPY packages/openhup-schemas/pyproject.toml packages/openhup-schemas/README.md ./packages/openhup-schemas/
+COPY packages/openhup-schemas/openhup_schemas ./packages/openhup-schemas/openhup_schemas
+COPY vision-service/pyproject.toml vision-service/README.md ./vision-service/
+
+WORKDIR /build/vision-service
+RUN uv venv /opt/venv \
+    && VIRTUAL_ENV=/opt/venv uv pip install --no-cache \
+        -e ../packages/openhup-schemas \
+        -e ".[${EXTRA}]"
+
+COPY vision-service/openhup_vision ./openhup_vision
+RUN VIRTUAL_ENV=/opt/venv uv pip install --no-cache --no-deps -e .
+
+# ------------------------------------------------------------------------------------------
+FROM python:3.12-slim AS runtime
+ARG EXTRA
+
+# FFmpeg libraries for PyAV (RTSP decode) and the minimal set OpenCV headless needs.
+# `intel-media-va-driver-non-free` and `intel-opencl-icd` are what make VA-API decode and the
+# OpenVINO GPU plugin work on an N100-class box; they are skipped for other profiles.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libavcodec59 libavformat59 libavutil57 libswscale6 libswresample4 \
+        libgl1 libglib2.0-0 \
+    && if [ "$EXTRA" = "openvino" ]; then \
+         apt-get install -y --no-install-recommends \
+           intel-opencl-icd intel-media-va-driver-non-free ocl-icd-libopencl1 || true; \
+       fi \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --create-home --uid 10002 openhup
+
+COPY --from=build /opt/venv /opt/venv
+COPY --from=build /build /app
+
+ENV PATH="/opt/venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    OPENHUP_MODEL_DIR=/models \
+    OPENHUP_ORT_THREADS=2
+
+WORKDIR /app/vision-service
+
+RUN mkdir -p /models /var/lib/openhup/snapshots \
+    && chown -R openhup:openhup /models /var/lib/openhup
+
+USER openhup
+
+# Reports its own view of the world: chosen execution provider and which models are present.
+HEALTHCHECK --interval=60s --timeout=15s --start-period=30s --retries=3 \
+    CMD python -m openhup_vision.backends --info >/dev/null || exit 1
+
+CMD ["openhup-vision", "--config", "/etc/openhup/vision.yaml", "--config", "/etc/openhup/cameras.yaml"]

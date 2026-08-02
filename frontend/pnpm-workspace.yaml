@@ -1,0 +1,4 @@
+# pnpm settings live here (not package.json) as of pnpm 10+.
+# esbuild needs its install script to run once so Vite can find its platform binary.
+allowBuilds:
+  esbuild: true

@@ -1,0 +1,73 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# --- Node / frontend ---
+node_modules/
+.svelte-kit/
+frontend/build/
+.pnpm-store/
+*.tsbuildinfo
+
+# --- Secrets & local config (NEVER commit) ---
+.env
+.env.*
+!.env.example
+deploy/env/*.env
+!deploy/env/*.env.example
+config.local.yaml
+secrets/
+*.pem
+*.key
+*.crt
+!deploy/**/*.example.crt
+
+# --- Model weights: fetched via scripts/fetch_models.py, never committed ---
+models/**
+!models/registry.yaml
+!models/README.md
+!models/.gitkeep
+*.onnx
+*.pt
+*.pth
+*.engine
+*.bin
+*.safetensors
+
+# --- Runtime data: snapshots, recordings, DB volumes ---
+data/
+snapshots/
+media/
+*.db
+*.sqlite3
+*.mp4
+*.mkv
+!vision-service/tests/fixtures/**/*.mp4
+
+# --- Generated code (checked by CI, not committed) ---
+packages/openhup-schemas/typescript/generated/
+packages/openhup-schemas/jsonschema/*.json
+!packages/openhup-schemas/jsonschema/.gitkeep
+frontend/.svelte-kit/
+backend/static/
+
+# --- Editors / OS ---
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+.DS_Store
+
+# --- Internal working artifacts (not part of the public project) ---
+CONTINUE.md
+scripts/_*.py
