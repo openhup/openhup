@@ -166,7 +166,12 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Compose file is valid
-        run: docker compose -f deploy/compose/docker-compose.yml config -q
+        # The stack needs deploy/env/openhup.env, which is gitignored (it holds secrets) and is
+        # normally created from the example at setup. Create it the same way a user would, so the
+        # validation exercises the real file the compose stack interpolates from.
+        run: |
+          cp deploy/env/openhup.env.example deploy/env/openhup.env
+          docker compose -f deploy/compose/docker-compose.yml config -q
         env:
           POSTGRES_PASSWORD: ci-placeholder
 
