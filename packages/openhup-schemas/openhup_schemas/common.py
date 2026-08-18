@@ -10,7 +10,7 @@ import re
 import secrets
 import time as _time
 from datetime import UTC, datetime, time, timedelta
-from enum import Enum
+from enum import StrEnum as _StdStrEnum
 from typing import Annotated, Any, Self
 
 from pydantic import (
@@ -159,7 +159,7 @@ def utcnow() -> datetime:
 # --------------------------------------------------------------------------------------
 
 
-class StrEnum(str, Enum):
+class StrEnum(_StdStrEnum):
     """str-valued enum that serialises as its value in JSON and YAML."""
 
     def __str__(self) -> str:  # pragma: no cover - trivial

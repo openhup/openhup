@@ -253,6 +253,28 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls,
+        init_settings,
+        env_settings,
+        dotenv_settings,
+        file_secret_settings,
+    ):
+        """Keep environment overrides stronger than YAML/constructor section values.
+
+        `Settings.load()` supplies nested dictionaries from YAML as init values. Pydantic Settings
+        otherwise treats that whole nested section as explicit and never applies a more specific
+        `OPENHUP__SECTION__KEY` variable, contrary to the documented precedence.
+        """
+        return (
+            env_settings,
+            init_settings,
+            dotenv_settings,
+            file_secret_settings,
+        )
+
     instance_name: str = "OpenHup"
     state_dir: str = "/var/lib/openhup"
     log_level: str = "INFO"

@@ -24,10 +24,16 @@ jobs:
         include:
           - component: schemas
             path: packages/openhup-schemas
+            coverage_target: openhup_schemas
+            coverage_floor: 85
           - component: backend
             path: backend
+            coverage_target: openhup
+            coverage_floor: 75
           - component: vision
             path: vision-service
+            coverage_target: openhup_vision
+            coverage_floor: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -39,9 +45,21 @@ jobs:
       - name: Sync
         working-directory: ${{ matrix.path }}
         run: uv sync
-      - name: Test
+      - name: Test with coverage
         working-directory: ${{ matrix.path }}
-        run: uv run pytest -q
+        run: >-
+          uv run --with pytest-cov pytest -q
+          --cov=${{ matrix.coverage_target }}
+          --cov-report=term-missing
+          --cov-report=xml:coverage.xml
+          --cov-fail-under=${{ matrix.coverage_floor }}
+      - name: Upload coverage report
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.component }}
+          path: ${{ matrix.path }}/coverage.xml
+          if-no-files-found: error
 
   lint:
     runs-on: ubuntu-latest
@@ -51,8 +69,14 @@ jobs:
         with: { python-version: "3.12" }
       - uses: astral-sh/setup-uv@v5
         with: { enable-cache: true }
-      - run: cd backend && uv sync && uv run ruff check . && uv run ruff format --check .
-      - run: cd vision-service && uv sync && uv run ruff check . && uv run ruff format --check .
+      - name: Lint schemas
+        run: cd packages/openhup-schemas && uv run --with ruff ruff check . && uv run --with ruff ruff format --check .
+      - name: Lint backend
+        run: cd backend && uv sync && uv run ruff check . && uv run ruff format --check .
+      - name: Lint vision
+        run: cd vision-service && uv sync && uv run ruff check . && uv run ruff format --check .
+      - name: Compile all Python sources
+        run: python -m compileall -q backend packages/openhup-schemas vision-service scripts
 
   frontend:
     name: frontend typecheck + build
@@ -76,6 +100,21 @@ jobs:
       - name: Build
         working-directory: frontend
         run: pnpm build
+      - name: Serve the production build
+        working-directory: frontend
+        run: |
+          pnpm preview --host 127.0.0.1 > "$RUNNER_TEMP/openhup-preview.log" 2>&1 &
+          server=$!
+          trap 'kill "$server" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent http://127.0.0.1:4173/ > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:4173/ > /dev/null
+          curl --fail --silent http://127.0.0.1:4173/tasks > /dev/null
+          curl --fail --silent http://127.0.0.1:4173/settings > /dev/null
 
   typecheck:
     name: mypy strict (engine core)
@@ -141,6 +180,7 @@ jobs:
           uv run alembic upgrade head
           uv run alembic downgrade base
           uv run alembic upgrade head
+          uv run pytest -q tests/test_postgres.py
 
   docker:
     name: images build
@@ -182,6 +222,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: astral-sh/setup-uv@v5
+        with: { enable-cache: true }
       - name: No model weights in the repository
         run: |
           found=$(git ls-files | grep -E '\.(onnx|pt|pth|safetensors|engine|bin)$' || true)
@@ -190,7 +234,7 @@ jobs:
           fi
       - name: Every model in the registry records a licence
         run: |
-          python3 - <<'PY'
+          uv run --with pyyaml python - <<'PY'
           import sys, yaml
           reg = yaml.safe_load(open("models/registry.yaml"))
           missing = [m["id"] for m in reg["models"] if not m.get("licence")]

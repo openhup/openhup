@@ -18,6 +18,12 @@ weights, zero, zilch, nada. That is a deliberate design property (the bus degrad
 make check      # lint + typecheck + tests + docs + examples: what CI runs
 ```
 
+CI runs each Python component with coverage reporting and a regression floor (schemas 85%, backend
+75%, vision 45%), serves the built frontend and smoke-tests its routes, and applies the complete
+Alembic history against PostgreSQL before exercising the async ORM. The PostgreSQL test is skipped
+when running locally without `OPENHUP__DATABASE__URL`; the normal suites remain SQLite/local-only
+so `make test` still needs no services.
+
 ## Where to start
 
 Good first contributions, roughly in order of usefulness (remove as needed):

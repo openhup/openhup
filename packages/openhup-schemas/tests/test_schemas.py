@@ -149,7 +149,7 @@ def test_observation_parses_wire_format() -> None:
     }
     obs = Observation.model_validate(raw)
     assert obs.signal("clutter_level").value == pytest.approx(0.72)
-    assert SignalKey("kitchen.counter", "clutter_score", "objects") in obs.keys()
+    assert SignalKey("kitchen.counter", "clutter_score", "objects") in obs.keys()  # noqa: SIM118
 
 
 def test_observation_rejects_duplicate_signal_keys() -> None:

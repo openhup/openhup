@@ -369,7 +369,9 @@ BUILTIN_DETECTORS = DetectorRegistry(
                 _S(
                     key="screen_activity",
                     kind=SignalKind.SCALAR,
-                    description="Temporal variance; distinguishes playing video from a paused menu.",
+                    description=(
+                        "Temporal variance; distinguishes playing video from a paused menu."
+                    ),
                     range=(0.0, 1.0),
                 ),
             ],
