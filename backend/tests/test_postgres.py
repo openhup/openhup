@@ -86,9 +86,8 @@ async def test_migrated_postgres_schema_accepts_core_rows(postgres_database) -> 
 async def test_postgres_preserves_timezone_aware_values(postgres_database) -> None:
     # A direct round-trip catches accidental use of a synchronous or SQLite-only driver in CI.
     async with session_scope() as session:
-        result = await session.execute(
-            text("SELECT CAST(:value AS timestamptz)"), {"value": "2026-08-17T14:00:00Z"}
-        )
+        value = datetime(2026, 8, 17, 14, tzinfo=UTC)
+        result = await session.execute(text("SELECT CAST(:value AS timestamptz)"), {"value": value})
         recovered = result.scalar_one()
 
     assert recovered.replace(tzinfo=UTC) == datetime(2026, 8, 17, 14, tzinfo=UTC)
