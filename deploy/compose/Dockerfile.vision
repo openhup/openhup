@@ -10,10 +10,14 @@
 # Model weights are NOT baked in. They are licensed separately, some are large, and pinning them
 # into an image makes the licence position of that image ambiguous. Mount /models and fetch them
 # with `python -m openhup_vision.backends --fetch`. See models/registry.yaml and ADR-004.
+#
+# The base is pinned to Debian 12 (bookworm): the FFmpeg runtime libs below are bookworm package
+# names, and the floating `python:3.12-slim` tag now tracks Debian 13 (trixie), where they do not
+# exist. A pinned base means this file's package names and the image it builds stay in agreement.
 
 ARG EXTRA=cpu
 
-FROM python:3.12-slim AS build
+FROM python:3.12-slim-bookworm AS build
 ARG EXTRA
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
@@ -38,7 +42,7 @@ COPY vision-service/openhup_vision ./openhup_vision
 RUN VIRTUAL_ENV=/opt/venv uv pip install --no-cache --no-deps -e .
 
 # ------------------------------------------------------------------------------------------
-FROM python:3.12-slim AS runtime
+FROM python:3.12-slim-bookworm AS runtime
 ARG EXTRA
 
 # FFmpeg libraries for PyAV (RTSP decode) and the minimal set OpenCV headless needs.

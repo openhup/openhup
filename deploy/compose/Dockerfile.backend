@@ -2,8 +2,11 @@
 #
 # Both processes ship in one image because they are one codebase with two entrypoints; the compose
 # file picks which to run. Multi-stage so the runtime layer carries no build tooling.
+#
+# Base is pinned to Debian 12 (bookworm) to match the vision image: a floating `python:3.12-slim`
+# tag has already moved to Debian 13 (trixie) once, and deterministic builds are the point.
 
-FROM python:3.12-slim AS build
+FROM python:3.12-slim-bookworm AS build
 
 # uv for fast, lockfile-respecting installs.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
@@ -28,7 +31,7 @@ COPY backend/alembic.ini ./alembic.ini
 RUN VIRTUAL_ENV=/opt/venv uv pip install --no-cache --no-deps -e .
 
 # ------------------------------------------------------------------------------------------
-FROM python:3.12-slim AS runtime
+FROM python:3.12-slim-bookworm AS runtime
 
 # curl is only for healthchecks and debugging; nothing else is added.
 RUN apt-get update \
